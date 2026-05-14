@@ -1372,22 +1372,65 @@ function loadState() {
     if (!state.activeBoardId || !state.boards.find(x => x.id === state.activeBoardId)) state.activeBoardId = state.boards[0].id;
 }
 
+// Firebase array'leri object'e çevirir ({0:..., 1:...}), bu fonksiyon düzeltir
+function fixFirebaseArrays(obj) {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj !== 'object') return obj;
+    // Eğer numeric key'li object ise array'e çevir
+    if (!Array.isArray(obj)) {
+        const keys = Object.keys(obj);
+        const isArrayLike = keys.length > 0 && keys.every(k => /^\d+$/.test(k));
+        if (isArrayLike) {
+            obj = keys.sort((a,b) => Number(a) - Number(b)).map(k => obj[k]);
+        }
+    }
+    // Recursive: alt elemanları da düzelt
+    if (Array.isArray(obj)) {
+        return obj.map(item => fixFirebaseArrays(item));
+    } else if (typeof obj === 'object') {
+        const fixed = {};
+        for (const key of Object.keys(obj)) {
+            fixed[key] = fixFirebaseArrays(obj[key]);
+        }
+        return fixed;
+    }
+    return obj;
+}
+
 function loadStateFromFirebase() {
     if (!dbRef) return;
     document.getElementById('syncDot').className = 'sync-dot syncing';
     document.getElementById('syncText').textContent = 'Yükleniyor...';
     dbRef.once('value').then(snapshot => {
         const data = snapshot.val();
-        if (data && data.boards && data.boards.length > 0) {
-            state.boards = data.boards;
-            state.activeBoardId = data.activeBoardId || state.boards[0]?.id;
-            // Yerel storage'ı da güncelle
-            localStorage.setItem('mencboard_data', JSON.stringify(state.boards));
-            localStorage.setItem('mencboard_activeBoard', state.activeBoardId);
+        if (data && data.boards) {
+            const boards = fixFirebaseArrays(data.boards);
+            if (Array.isArray(boards) && boards.length > 0) {
+                state.boards = boards;
+                // Her board'un lists ve cards'ını da düzelt
+                state.boards.forEach(board => {
+                    if (!Array.isArray(board.lists)) board.lists = [];
+                    if (!Array.isArray(board.labels)) board.labels = JSON.parse(JSON.stringify(DEFAULT_LABELS));
+                    board.lists.forEach(list => {
+                        if (!Array.isArray(list.cards)) list.cards = [];
+                        list.cards.forEach(card => {
+                            if (!Array.isArray(card.labels)) card.labels = [];
+                            if (!Array.isArray(card.checklist)) card.checklist = [];
+                            if (!Array.isArray(card.attachments)) card.attachments = [];
+                            if (!Array.isArray(card.comments)) card.comments = [];
+                        });
+                    });
+                });
+                state.activeBoardId = data.activeBoardId || state.boards[0]?.id;
+                localStorage.setItem('mencboard_data', JSON.stringify(state.boards));
+                localStorage.setItem('mencboard_activeBoard', state.activeBoardId);
+            } else {
+                loadState();
+                saveState();
+            }
         } else {
             // Firebase'de veri yoksa yerel verileri yükle
             loadState();
-            // Ve Firebase'e kaydet
             saveState();
         }
         renderBoardTabs(); renderBoard();
@@ -1403,13 +1446,23 @@ function loadStateFromFirebase() {
 
     // Gerçek zamanlı dinleme (başka cihazdan yapılan değişiklikleri al)
     dbRef.on('value', snapshot => {
-        if (isSaving) return; // Kendi yazdığımız veriyi tekrar yükleme
+        if (isSaving) return;
         const data = snapshot.val();
         if (data && data.boards) {
-            state.boards = data.boards;
-            state.activeBoardId = data.activeBoardId || state.boards[0]?.id;
-            localStorage.setItem('mencboard_data', JSON.stringify(state.boards));
-            renderBoardTabs(); renderBoard();
+            const boards = fixFirebaseArrays(data.boards);
+            if (Array.isArray(boards) && boards.length > 0) {
+                state.boards = boards;
+                state.boards.forEach(board => {
+                    if (!Array.isArray(board.lists)) board.lists = [];
+                    if (!Array.isArray(board.labels)) board.labels = JSON.parse(JSON.stringify(DEFAULT_LABELS));
+                    board.lists.forEach(list => {
+                        if (!Array.isArray(list.cards)) list.cards = [];
+                    });
+                });
+                state.activeBoardId = data.activeBoardId || state.boards[0]?.id;
+                localStorage.setItem('mencboard_data', JSON.stringify(state.boards));
+                renderBoardTabs(); renderBoard();
+            }
         }
     });
 }
