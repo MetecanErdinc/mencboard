@@ -1230,11 +1230,21 @@ function googleSignIn() {
 
 // Redirect sonrası token'ı yakala (mobil için)
 auth.getRedirectResult().then(result => {
-    if (result && result.credential) {
-        googleAccessToken = result.credential.accessToken;
+    if (result && result.user) {
+        const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
+        if (credential) {
+            googleAccessToken = credential.accessToken;
+        }
     }
 }).catch(e => {
-    if (e.code !== 'auth/null-user') console.error('Redirect hatası:', e);
+    console.error('Redirect hatası:', e);
+    // Hata mesajını kullanıcıya göster (debug için)
+    setTimeout(() => {
+        const msg = e.code === 'auth/unauthorized-domain'
+            ? 'Bu domain Firebase\'de yetkilendirilmemiş. Firebase Console → Authentication → Settings → Authorized domains kısmına "metecanerdinc.github.io" ekleyin.'
+            : 'Giriş hatası: ' + e.message;
+        alert(msg);
+    }, 500);
 });
 
 function refreshGoogleToken() {
