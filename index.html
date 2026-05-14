@@ -1205,29 +1205,51 @@ let saveTimeout = null;
 let googleAccessToken = null;
 let isSaving = false; // Firebase yazma sırasında kendi listener'ımızı yoksay
 
+// Mobil cihaz tespiti
+function isMobile() {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+}
+
 // ===== GOOGLE AUTH =====
 function googleSignIn() {
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.addScope('https://www.googleapis.com/auth/drive.file');
-    auth.signInWithPopup(provider).then(result => {
-        // Google OAuth access token (Drive API için gerekli)
-        const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
-        if (credential) {
-            googleAccessToken = credential.accessToken;
-        }
-    }).catch(e => showToast('Giriş başarısız: ' + e.message, 'error'));
+    if (isMobile()) {
+        // Mobilde redirect kullan (popup engelleniyor)
+        auth.signInWithRedirect(provider);
+    } else {
+        // Masaüstünde popup kullan
+        auth.signInWithPopup(provider).then(result => {
+            const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
+            if (credential) {
+                googleAccessToken = credential.accessToken;
+            }
+        }).catch(e => showToast('Giriş başarısız: ' + e.message, 'error'));
+    }
 }
 
+// Redirect sonrası token'ı yakala (mobil için)
+auth.getRedirectResult().then(result => {
+    if (result && result.credential) {
+        googleAccessToken = result.credential.accessToken;
+    }
+}).catch(e => {
+    if (e.code !== 'auth/null-user') console.error('Redirect hatası:', e);
+});
+
 function refreshGoogleToken() {
-    // Token süresi dolduğunda yenile
     if (!currentUser) return Promise.reject('Giriş yapılmamış');
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.addScope('https://www.googleapis.com/auth/drive.file');
-    return auth.currentUser.reauthenticateWithPopup(provider).then(result => {
-        const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
-        if (credential) googleAccessToken = credential.accessToken;
-        return googleAccessToken;
-    });
+    if (isMobile()) {
+        return auth.currentUser.reauthenticateWithRedirect(provider);
+    } else {
+        return auth.currentUser.reauthenticateWithPopup(provider).then(result => {
+            const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
+            if (credential) googleAccessToken = credential.accessToken;
+            return googleAccessToken;
+        });
+    }
 }
 
 function signOut() {
