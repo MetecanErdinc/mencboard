@@ -1295,10 +1295,44 @@ function showToast(msg, type = 'info') {
 }
 
 // ===== STATE MANAGEMENT =====
+
+// Board verisinden base64 data'yı temizle (localStorage ve Firebase için)
+function stripAttachmentData(boards) {
+    const clean = JSON.parse(JSON.stringify(boards));
+    clean.forEach(board => {
+        if (!board.lists) board.lists = [];
+        if (!board.labels) board.labels = [];
+        board.lists.forEach(list => {
+            if (!list.cards) list.cards = [];
+            list.cards.forEach(card => {
+                if (!card.labels) card.labels = [];
+                if (!card.checklist) card.checklist = [];
+                if (!card.comments) card.comments = [];
+                if (card.attachments && card.attachments.length > 0) {
+                    card.attachments = card.attachments.map(att => ({
+                        id: att.id || '', name: att.name || '', size: att.size || 0,
+                        type: att.type || '', addedAt: att.addedAt || '',
+                        driveFileId: att.driveFileId || '',
+                        driveUrl: att.driveUrl || ''
+                    }));
+                } else {
+                    card.attachments = [];
+                }
+            });
+        });
+    });
+    return clean;
+}
+
 function saveState() {
-    // Yerel yedek
-    localStorage.setItem('mencboard_data', JSON.stringify(state.boards));
-    localStorage.setItem('mencboard_activeBoard', state.activeBoardId);
+    // Yerel yedek (base64 data olmadan - localStorage 5MB limiti var)
+    try {
+        const cleanBoards = stripAttachmentData(state.boards);
+        localStorage.setItem('mencboard_data', JSON.stringify(cleanBoards));
+        localStorage.setItem('mencboard_activeBoard', state.activeBoardId);
+    } catch(e) {
+        console.warn('localStorage kayıt hatası (muhtemelen boyut limiti):', e);
+    }
 
     // Firebase'e kaydet (debounce - 500ms)
     if (dbRef) {
@@ -1306,35 +1340,14 @@ function saveState() {
         document.getElementById('syncText').textContent = 'Kaydediliyor...';
         clearTimeout(saveTimeout);
         saveTimeout = setTimeout(() => {
-            // Attachment data (base64) çok büyük olabilir, sadece metadata kaydet
-            const boardsForDB = JSON.parse(JSON.stringify(state.boards));
-            boardsForDB.forEach(board => {
-                board.lists.forEach(list => {
-                    list.cards.forEach(card => {
-                        if (card.attachments && card.attachments.length > 0) {
-                            card.attachments = card.attachments.map(att => ({
-                                id: att.id || '', name: att.name || '', size: att.size || 0,
-                                type: att.type || '', addedAt: att.addedAt || '',
-                                driveFileId: att.driveFileId || '',
-                                driveUrl: att.driveUrl || ''
-                                // data alanı Firebase'e gönderilmez (çok büyük)
-                            }));
-                        } else {
-                            card.attachments = [];
-                        }
-                        if (!card.checklist) card.checklist = [];
-                        if (!card.comments) card.comments = [];
-                        if (!card.labels) card.labels = [];
-                    });
-                });
-            });
+            const boardsForDB = stripAttachmentData(state.boards);
             isSaving = true;
             dbRef.set({
                 boards: boardsForDB,
                 activeBoardId: state.activeBoardId,
                 lastUpdated: new Date().toISOString()
             }).then(() => {
-                setTimeout(() => { isSaving = false; }, 200);
+                setTimeout(() => { isSaving = false; }, 300);
                 document.getElementById('syncDot').className = 'sync-dot';
                 document.getElementById('syncText').textContent = 'Kaydedildi';
             }).catch(e => {
@@ -1829,45 +1842,45 @@ function uploadToDrive(file) {
 function handleFileUpload(files) {
     const card = getCurrentCard(); if (!card || !files.length) return;
     if (!card.attachments) card.attachments = [];
-    const fileCount = files.length;
-    let uploaded = 0;
 
     [...files].forEach(file => {
-        // Önce base64 olarak yerel kaydet (anında gösterim için)
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const attachment = {
-                id: generateId(), name: file.name, size: file.size,
-                type: file.type, data: e.target.result, addedAt: new Date().toISOString(),
-                driveFileId: null, driveUrl: null, uploading: true
-            };
-            card.attachments.push(attachment);
-            renderAttachments(card); renderBoard();
-
-            // Google Drive'a yükle (arka planda)
-            if (googleAccessToken) {
-                uploadToDrive(file).then(driveData => {
-                    attachment.driveFileId = driveData.id;
-                    attachment.driveUrl = driveData.webViewLink || driveData.webContentLink;
-                    attachment.uploading = false;
-                    saveState(); renderAttachments(card);
-                    uploaded++;
-                    if (uploaded === fileCount) showToast(`${fileCount} dosya Drive'a yüklendi`, 'success');
-                }).catch(err => {
-                    console.error('Drive yükleme hatası:', err);
-                    attachment.uploading = false;
-                    saveState(); renderAttachments(card);
-                    showToast('Drive yükleme başarısız: ' + (err.message || err), 'warning');
-                });
-            } else {
-                // Drive token yok, sadece yerel kaydet
-                attachment.uploading = false;
-                saveState(); renderAttachments(card);
-                uploaded++;
-                if (uploaded === fileCount) showToast(`${fileCount} dosya eklendi (yerel)`, 'info');
-            }
+        const attachment = {
+            id: generateId(), name: file.name, size: file.size,
+            type: file.type, addedAt: new Date().toISOString(),
+            driveFileId: '', driveUrl: '', uploading: true
         };
-        reader.readAsDataURL(file);
+        card.attachments.push(attachment);
+        renderAttachments(card);
+
+        // Google Drive'a yükle
+        if (googleAccessToken) {
+            uploadToDrive(file).then(driveData => {
+                attachment.driveFileId = driveData.id || '';
+                attachment.driveUrl = driveData.webViewLink || driveData.webContentLink || '';
+                attachment.uploading = false;
+                // Drive'da herkese açık yap (link ile erişilebilir)
+                if (driveData.id && googleAccessToken) {
+                    fetch('https://www.googleapis.com/drive/v3/files/' + driveData.id + '/permissions', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + googleAccessToken, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ role: 'reader', type: 'anyone' })
+                    }).catch(e => console.warn('Drive izin hatası:', e));
+                }
+                saveState(); renderAttachments(card); renderBoard();
+                showToast(file.name + ' Drive\'a yüklendi', 'success');
+            }).catch(err => {
+                console.error('Drive yükleme hatası:', err);
+                attachment.uploading = false;
+                // Drive başarısız olsa bile metadata'yı kaydet
+                saveState(); renderAttachments(card);
+                showToast('Drive yükleme başarısız: ' + (err.message || err), 'warning');
+            });
+        } else {
+            // Drive token yok, sadece metadata kaydet
+            attachment.uploading = false;
+            saveState(); renderAttachments(card); renderBoard();
+            showToast(file.name + ' eklendi (Drive bağlantısı yok)', 'info');
+        }
     });
     document.getElementById('fileInput').value = '';
 }
@@ -1878,19 +1891,20 @@ function renderAttachments(card) {
     card.attachments.forEach((att, idx) => {
         const el = document.createElement('div'); el.className = 'attachment-item';
         const isImage = att.type?.startsWith('image/');
-        const hasDrive = att.driveUrl || att.driveFileId;
+        const hasDrive = att.driveFileId && att.driveFileId.length > 1;
+        const driveLink = att.driveUrl || (hasDrive ? 'https://drive.google.com/file/d/' + att.driveFileId + '/view' : '');
+        const driveThumb = hasDrive && isImage ? 'https://drive.google.com/thumbnail?id=' + att.driveFileId + '&sz=w200' : '';
         const statusIcon = att.uploading ? '<span class="material-icons-outlined" style="font-size:14px;color:#ffd600;animation:spin 1s linear infinite;">sync</span>' :
             hasDrive ? '<span class="material-icons-outlined" style="font-size:14px;color:#4caf50;" title="Google Drive\'da">cloud_done</span>' :
-            '<span class="material-icons-outlined" style="font-size:14px;color:#ff9800;" title="Sadece yerel">computer</span>';
+            '<span class="material-icons-outlined" style="font-size:14px;color:#ff9800;" title="Sadece metadata">description</span>';
         el.innerHTML = `
             <div class="attachment-icon"><span class="material-icons-outlined">${isImage ? 'image' : 'insert_drive_file'}</span></div>
             <div class="attachment-info">
                 <div class="attachment-name">${escapeHtml(att.name)} ${statusIcon}</div>
                 <div class="attachment-size">${formatFileSize(att.size || 0)}</div>
             </div>
-            ${isImage && att.data ? `<img class="attachment-preview" src="${att.data}" onclick="window.open(this.src)" title="Büyütmek için tıklayın">` : ''}
-            ${hasDrive ? `<button class="btn-cancel" onclick="window.open('${att.driveUrl || 'https://drive.google.com/file/d/' + att.driveFileId + '/view'}')" title="Drive'da Aç"><span class="material-icons-outlined" style="font-size:16px">open_in_new</span></button>` : ''}
-            ${att.data ? `<button class="btn-cancel" onclick="downloadAttachment(${idx})" title="İndir"><span class="material-icons-outlined" style="font-size:16px">download</span></button>` : ''}
+            ${driveThumb ? `<img class="attachment-preview" src="${driveThumb}" onclick="window.open('${driveLink}')" title="Büyütmek için tıklayın" style="cursor:pointer;">` : ''}
+            ${hasDrive ? `<button class="btn-cancel" onclick="window.open('${driveLink}')" title="Drive'da Aç"><span class="material-icons-outlined" style="font-size:16px">open_in_new</span></button>` : ''}
             <button class="btn-cancel" onclick="removeAttachment(${idx})" title="Kaldır"><span class="material-icons-outlined" style="font-size:16px">close</span></button>`;
         c.appendChild(el);
     });
@@ -1899,7 +1913,11 @@ function renderAttachments(card) {
 function downloadAttachment(idx) {
     const card = getCurrentCard(); if (!card) return;
     const att = card.attachments[idx];
-    const a = document.createElement('a'); a.href = att.data; a.download = att.name; a.click();
+    if (att.driveFileId) {
+        window.open('https://drive.google.com/file/d/' + att.driveFileId + '/view');
+    } else if (att.driveUrl) {
+        window.open(att.driveUrl);
+    }
 }
 
 function removeAttachment(idx) { const c = getCurrentCard(); if (c) { c.attachments.splice(idx, 1); saveState(); renderAttachments(c); renderBoard(); } }
