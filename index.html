@@ -1311,15 +1311,20 @@ function saveState() {
             boardsForDB.forEach(board => {
                 board.lists.forEach(list => {
                     list.cards.forEach(card => {
-                        if (card.attachments) {
+                        if (card.attachments && card.attachments.length > 0) {
                             card.attachments = card.attachments.map(att => ({
-                                id: att.id, name: att.name, size: att.size,
-                                type: att.type, addedAt: att.addedAt,
-                                driveFileId: att.driveFileId || null,
-                                driveUrl: att.driveUrl || null
+                                id: att.id || '', name: att.name || '', size: att.size || 0,
+                                type: att.type || '', addedAt: att.addedAt || '',
+                                driveFileId: att.driveFileId || '',
+                                driveUrl: att.driveUrl || ''
                                 // data alanı Firebase'e gönderilmez (çok büyük)
                             }));
+                        } else {
+                            card.attachments = [];
                         }
+                        if (!card.checklist) card.checklist = [];
+                        if (!card.comments) card.comments = [];
+                        if (!card.labels) card.labels = [];
                     });
                 });
             });
@@ -1438,11 +1443,26 @@ function loadStateFromFirebase() {
                     if (!Array.isArray(board.labels)) board.labels = JSON.parse(JSON.stringify(DEFAULT_LABELS));
                     board.lists.forEach(list => {
                         if (!Array.isArray(list.cards)) list.cards = [];
+                        list.cards.forEach(card => {
+                            if (!Array.isArray(card.labels)) card.labels = [];
+                            if (!Array.isArray(card.checklist)) card.checklist = [];
+                            if (!Array.isArray(card.attachments)) card.attachments = [];
+                            if (!Array.isArray(card.comments)) card.comments = [];
+                        });
                     });
                 });
                 state.activeBoardId = data.activeBoardId || state.boards[0]?.id;
                 localStorage.setItem('mencboard_data', JSON.stringify(state.boards));
                 renderBoardTabs(); renderBoard();
+                // Açık kart modalı varsa onu da güncelle
+                if (currentCardId) {
+                    const card = getCurrentCard();
+                    if (card) {
+                        renderAttachments(card);
+                        renderChecklist(card);
+                        renderComments(card);
+                    }
+                }
             }
         }
     });
