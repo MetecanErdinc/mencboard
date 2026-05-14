@@ -1214,52 +1214,23 @@ function isMobile() {
 function googleSignIn() {
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.addScope('https://www.googleapis.com/auth/drive.file');
-    if (isMobile()) {
-        // Mobilde redirect kullan (popup engelleniyor)
-        auth.signInWithRedirect(provider);
-    } else {
-        // Masaüstünde popup kullan
-        auth.signInWithPopup(provider).then(result => {
-            const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
-            if (credential) {
-                googleAccessToken = credential.accessToken;
-            }
-        }).catch(e => showToast('Giriş başarısız: ' + e.message, 'error'));
-    }
-}
-
-// Redirect sonrası token'ı yakala (mobil için)
-auth.getRedirectResult().then(result => {
-    if (result && result.user) {
+    auth.signInWithPopup(provider).then(result => {
         const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
         if (credential) {
             googleAccessToken = credential.accessToken;
         }
-    }
-}).catch(e => {
-    console.error('Redirect hatası:', e);
-    // Hata mesajını kullanıcıya göster (debug için)
-    setTimeout(() => {
-        const msg = e.code === 'auth/unauthorized-domain'
-            ? 'Bu domain Firebase\'de yetkilendirilmemiş. Firebase Console → Authentication → Settings → Authorized domains kısmına "metecanerdinc.github.io" ekleyin.'
-            : 'Giriş hatası: ' + e.message;
-        alert(msg);
-    }, 500);
-});
+    }).catch(e => showToast('Giriş başarısız: ' + e.message, 'error'));
+}
 
 function refreshGoogleToken() {
     if (!currentUser) return Promise.reject('Giriş yapılmamış');
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.addScope('https://www.googleapis.com/auth/drive.file');
-    if (isMobile()) {
-        return auth.currentUser.reauthenticateWithRedirect(provider);
-    } else {
-        return auth.currentUser.reauthenticateWithPopup(provider).then(result => {
-            const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
-            if (credential) googleAccessToken = credential.accessToken;
-            return googleAccessToken;
-        });
-    }
+    return auth.currentUser.reauthenticateWithPopup(provider).then(result => {
+        const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
+        if (credential) googleAccessToken = credential.accessToken;
+        return googleAccessToken;
+    });
 }
 
 function signOut() {
