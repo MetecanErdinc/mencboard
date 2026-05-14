@@ -1215,9 +1215,14 @@ function googleSignIn() {
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.addScope('https://www.googleapis.com/auth/drive.file');
     auth.signInWithPopup(provider).then(result => {
-        const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
-        if (credential) {
-            googleAccessToken = credential.accessToken;
+        // Compat SDK'da token direkt result.credential içinde
+        if (result.credential && result.credential.accessToken) {
+            googleAccessToken = result.credential.accessToken;
+            console.log('Google Drive token alındı ✓');
+            showToast('Google Drive bağlandı', 'success');
+        } else {
+            console.warn('Google credential alınamadı:', result);
+            showToast('Drive bağlantısı kurulamadı', 'warning');
         }
     }).catch(e => showToast('Giriş başarısız: ' + e.message, 'error'));
 }
@@ -1227,8 +1232,9 @@ function refreshGoogleToken() {
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.addScope('https://www.googleapis.com/auth/drive.file');
     return auth.currentUser.reauthenticateWithPopup(provider).then(result => {
-        const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
-        if (credential) googleAccessToken = credential.accessToken;
+        if (result.credential && result.credential.accessToken) {
+            googleAccessToken = result.credential.accessToken;
+        }
         return googleAccessToken;
     });
 }
@@ -1853,7 +1859,7 @@ function handleFileUpload(files) {
         renderAttachments(card);
 
         // Google Drive'a yükle
-        if (googleAccessToken) {
+        const doUpload = () => {
             uploadToDrive(file).then(driveData => {
                 attachment.driveFileId = driveData.id || '';
                 attachment.driveUrl = driveData.webViewLink || driveData.webContentLink || '';
@@ -1871,15 +1877,23 @@ function handleFileUpload(files) {
             }).catch(err => {
                 console.error('Drive yükleme hatası:', err);
                 attachment.uploading = false;
-                // Drive başarısız olsa bile metadata'yı kaydet
                 saveState(); renderAttachments(card);
                 showToast('Drive yükleme başarısız: ' + (err.message || err), 'warning');
             });
+        };
+
+        if (googleAccessToken) {
+            doUpload();
         } else {
-            // Drive token yok, sadece metadata kaydet
-            attachment.uploading = false;
-            saveState(); renderAttachments(card); renderBoard();
-            showToast(file.name + ' eklendi (Drive bağlantısı yok)', 'info');
+            // Token yok, önce Drive izni iste sonra yükle
+            showToast('Drive bağlantısı kuruluyor...', 'info');
+            refreshGoogleToken().then(() => {
+                doUpload();
+            }).catch(() => {
+                attachment.uploading = false;
+                saveState(); renderAttachments(card); renderBoard();
+                showToast(file.name + ' eklendi (Drive bağlantısı yok)', 'warning');
+            });
         }
     });
     document.getElementById('fileInput').value = '';
